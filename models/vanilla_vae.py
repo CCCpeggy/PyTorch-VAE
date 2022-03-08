@@ -4,6 +4,9 @@ from torch import nn
 from torch.nn import functional as F
 from .types_ import *
 
+imgsize = 128
+dimtimes = imgsize // 32
+img_channel = 1
 
 class VanillaVAE(BaseVAE):
 
@@ -33,14 +36,14 @@ class VanillaVAE(BaseVAE):
             in_channels = h_dim
 
         self.encoder = nn.Sequential(*modules)
-        self.fc_mu = nn.Linear(hidden_dims[-1]*4, latent_dim)
-        self.fc_var = nn.Linear(hidden_dims[-1]*4, latent_dim)
+        self.fc_mu = nn.Linear(hidden_dims[-1] * dimtimes * dimtimes, latent_dim)
+        self.fc_var = nn.Linear(hidden_dims[-1] * dimtimes * dimtimes, latent_dim)
 
 
         # Build Decoder
         modules = []
 
-        self.decoder_input = nn.Linear(latent_dim, hidden_dims[-1] * 4)
+        self.decoder_input = nn.Linear(latent_dim, hidden_dims[-1] * dimtimes * dimtimes)
 
         hidden_dims.reverse()
 
@@ -70,7 +73,7 @@ class VanillaVAE(BaseVAE):
                                                output_padding=1),
                             nn.BatchNorm2d(hidden_dims[-1]),
                             nn.LeakyReLU(),
-                            nn.Conv2d(hidden_dims[-1], out_channels= 3,
+                            nn.Conv2d(hidden_dims[-1], out_channels=img_channel,
                                       kernel_size= 3, padding= 1),
                             nn.Tanh())
 
@@ -99,7 +102,7 @@ class VanillaVAE(BaseVAE):
         :return: (Tensor) [B x C x H x W]
         """
         result = self.decoder_input(z)
-        result = result.view(-1, 512, 2, 2)
+        result = result.view(-1, 512, dimtimes, dimtimes)
         result = self.decoder(result)
         result = self.final_layer(result)
         return result
@@ -171,3 +174,34 @@ class VanillaVAE(BaseVAE):
         """
 
         return self.forward(x)[0]
+    
+    
+    def load_state_dict(self, model):
+        encoder_state_dict = {}
+        fc_mu_state_dict = {}
+        fc_var_state_dict = {}
+        decoder_state_dict = {}
+        decoder_input_state_dict = {}
+        final_layer_state_dict = {}
+        for key, value in model["state_dict"].items():
+            if "model.encoder." in key:
+                encoder_state_dict[key[14:]] = value
+            elif "model.fc_mu." in key:
+                fc_mu_state_dict[key[12:]] = value
+            elif "model.fc_var." in key:
+                fc_var_state_dict[key[13:]] = value
+            elif "model.decoder." in key:
+                decoder_state_dict[key[14:]] = value
+            elif "model.decoder_input." in key:
+                decoder_input_state_dict[key[20:]] = value
+            elif "model.final_layer." in key:
+                final_layer_state_dict[key[18:]] = value
+            else:
+                print(key)
+
+        self.encoder.load_state_dict(encoder_state_dict)
+        self.fc_mu.load_state_dict(fc_mu_state_dict)
+        self.fc_var.load_state_dict(fc_var_state_dict)
+        self.decoder.load_state_dict(decoder_state_dict)
+        self.decoder_input.load_state_dict(decoder_input_state_dict)
+        self.final_layer.load_state_dict(final_layer_state_dict)

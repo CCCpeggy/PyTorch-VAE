@@ -158,7 +158,7 @@ class VQVAE(BaseVAE):
         modules.append(
             nn.Sequential(
                 nn.ConvTranspose2d(hidden_dims[-1],
-                                   out_channels=3,
+                                   out_channels=1,
                                    kernel_size=4,
                                    stride=2, padding=1),
                 nn.Tanh()))
@@ -223,3 +223,19 @@ class VQVAE(BaseVAE):
         """
 
         return self.forward(x)[0]
+
+    def load_state_dict(self, model):
+        encoder_state_dict = {}
+        decoder_state_dict = {}
+        vq_layer_state_dict = {}
+        for key, value in tmp_model["state_dict"].items():
+            if "model.encoder." in key:
+                encoder_state_dict[key[14:]] = value
+            if "model.decoder." in key:
+                decoder_state_dict[key[14:]] = value
+            if "model.vq_layer." in key:
+                vq_layer_state_dict[key[15:]] = value
+
+        self.encoder.load_state_dict(encoder_state_dict)
+        self.decoder.load_state_dict(decoder_state_dict)
+        self.vq_layer.load_state_dict(vq_layer_state_dict)

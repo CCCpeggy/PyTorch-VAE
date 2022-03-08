@@ -1,28 +1,26 @@
 import torch
 from models import BaseVAE
 from torch import nn
-from torchvision.models import vgg19_bn
 from torch.nn import functional as F
 from .types_ import *
+from .vgg import VGG, GramMatrix, GramMSELoss
+import torchvision
 
 imgsize = 32
 dimtimes = imgsize // 32
 img_channel = 1
 
-class DFCVAE(BaseVAE):
+class VanillaVAE(BaseVAE):
+
 
     def __init__(self,
                  in_channels: int,
                  latent_dim: int,
                  hidden_dims: List = None,
-                 alpha:float = 1,
-                 beta:float = 0.5,
                  **kwargs) -> None:
-        super(DFCVAE, self).__init__()
+        super(VanillaVAE, self).__init__()
 
         self.latent_dim = latent_dim
-        self.alpha = alpha
-        self.beta = beta
 
         modules = []
         if hidden_dims is None:
@@ -31,7 +29,8 @@ class DFCVAE(BaseVAE):
         # Build Encoder
         for h_dim in hidden_dims:
             modules.append(
-                nn.Sequential(nn.Conv2d(in_channels, out_channels=h_dim,
+                nn.Sequential(
+                    nn.Conv2d(in_channels, out_channels=h_dim,
                               kernel_size= 3, stride= 2, padding  = 1),
                     nn.BatchNorm2d(h_dim),
                     nn.LeakyReLU())
@@ -49,6 +48,7 @@ class DFCVAE(BaseVAE):
         self.decoder_input = nn.Linear(latent_dim, hidden_dims[-1] * dimtimes * dimtimes)
 
         hidden_dims.reverse()
+        hidden_dims.append(16)
 
         for i in range(len(hidden_dims) - 1):
             modules.append(
@@ -63,8 +63,6 @@ class DFCVAE(BaseVAE):
                     nn.LeakyReLU())
             )
 
-
-
         self.decoder = nn.Sequential(*modules)
 
         self.final_layer = nn.Sequential(
@@ -76,18 +74,25 @@ class DFCVAE(BaseVAE):
                                                output_padding=1),
                             nn.BatchNorm2d(hidden_dims[-1]),
                             nn.LeakyReLU(),
-                            nn.Conv2d(hidden_dims[-1], out_channels= img_channel,
+                            nn.Conv2d(hidden_dims[-1], out_channels=img_channel,
                                       kernel_size= 3, padding= 1),
                             nn.Tanh())
-
-        self.feature_network = vgg19_bn(pretrained=True)
-
-        # Freeze the pretrained feature network
-        for param in self.feature_network.parameters():
+        
+        self.style_layers = ['r11', 'r21', 'r31', 'r41', 'r51']
+        # self.content_layers = ['r42']
+        self.loss_layers = self.style_layers
+        self.loss_fns = [GramMSELoss()] * len(self.style_layers)
+        if torch.cuda.is_available():
+            self.loss_fns = [loss_fn.cuda() for loss_fn in self.loss_fns]
+        self.vgg = VGG()
+        self.vgg.load_state_dict(torch.load('./models/vgg_conv.pth'))
+        for param in self.vgg.parameters():
             param.requires_grad = False
-
-        self.feature_network.eval()
-
+        if torch.cuda.is_available():
+            self.vgg.cuda()
+        self.style_weights = [1e3 / n ** 2 for n in [64, 128, 256, 512, 512]]
+        # self.content_weights = [1e0]
+        self.weights = self.style_weights
 
     def encode(self, input: Tensor) -> List[Tensor]:
         """
@@ -131,36 +136,11 @@ class DFCVAE(BaseVAE):
         eps = torch.randn_like(std)
         return eps * std + mu
 
-    def forward(self, input: Tensor, **kwargs) -> List[Tensor]:
+    def forward(self, double_input: Tensor, input: Tensor, **kwargs) -> List[Tensor]:
         mu, log_var = self.encode(input)
         z = self.reparameterize(mu, log_var)
-        recons = self.decode(z)
-
-        recons_features = self.extract_features(recons)
-        input_features = self.extract_features(input)
-
-        return  [recons, input, recons_features, input_features, mu, log_var]
-
-    def extract_features(self,
-                         input: Tensor,
-                         feature_layers: List = None) -> List[Tensor]:
-        """
-        Extracts the features from the pretrained model
-        at the layers indicated by feature_layers.
-        :param input: (Tensor) [B x C x H x W]
-        :param feature_layers: List of string of IDs
-        :return: List of the extracted features
-        """
-        if feature_layers is None:
-            feature_layers = ['14', '24', '34', '43']
-        features = []
-        result = torch.cat([input, input, input], 1)
-        for (key, module) in self.feature_network.features._modules.items():
-            result = module(result)
-            if(key in feature_layers):
-                features.append(result)
-
-        return features
+        result = self.decode(z)
+        return  [result, double_input, mu, log_var]
 
     def loss_function(self,
                       *args,
@@ -174,22 +154,32 @@ class DFCVAE(BaseVAE):
         """
         recons = args[0]
         input = args[1]
-        recons_features = args[2]
-        input_features = args[3]
-        mu = args[4]
-        log_var = args[5]
+        mu = args[2]
+        log_var = args[3]
+        # recons_loss = (self.style_loss(recons, input, 64) + self.style_loss(recons, input, imgsize * 2)) * 0.5 
+        recons_loss = self.style_loss(recons, input, imgsize * 2)
+        # recons_loss = F.mse_loss(recons, input)
 
         kld_weight = kwargs['M_N'] # Account for the minibatch samples from the dataset
-        recons_loss =F.mse_loss(recons, input)
-
-        feature_loss = 0.0
-        for (r, i) in zip(recons_features, input_features):
-            feature_loss += F.mse_loss(r, i)
-
         kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
 
-        loss = self.beta * (recons_loss + feature_loss) + self.alpha * kld_weight * kld_loss
+        loss = recons_loss + kld_weight * kld_loss
         return {'loss': loss, 'Reconstruction_Loss':recons_loss, 'KLD':-kld_loss}
+
+    def style_loss(self, recons, input, size):
+        # input = torchvision.transforms.RandomCrop(size)(input)
+        # recons = torchvision.transforms.RandomCrop(size)(recons)
+        # input = torchvision.transforms.Resize(64)(input)
+        # recons = torchvision.transforms.Resize(64)(recons)
+        input = torch.cat((input, input, input), 1)
+        recons = torch.cat((recons, recons, recons), 1)
+        style_targets = [GramMatrix()(A).detach() for A in self.vgg(input, self.style_layers)]
+        targets = style_targets
+        out = self.vgg(recons, self.loss_layers)
+        layer_losses = [self.weights[a] * self.loss_fns[a](A, targets[a]) for a, A in enumerate(out)]
+        loss = sum(layer_losses)
+        # loss.backward(retain_graph=True)
+        return loss
 
     def sample(self,
                num_samples:int,
@@ -209,14 +199,14 @@ class DFCVAE(BaseVAE):
         samples = self.decode(z)
         return samples
 
-    def generate(self, x: Tensor, **kwargs) -> Tensor:
+    def generate(self, dx: Tensor, x: Tensor, **kwargs) -> Tensor:
         """
         Given an input image x, returns the reconstructed image
         :param x: (Tensor) [B x C x H x W]
         :return: (Tensor) [B x C x H x W]
         """
 
-        return self.forward(x)[0]
+        return self.forward(dx, x)[0]
 
     def load_state_dict(self, model):
         encoder_state_dict = {}
@@ -226,7 +216,6 @@ class DFCVAE(BaseVAE):
         decoder_input_state_dict = {}
         final_layer_state_dict = {}
         vgg_state_dict = {}
-        feature_network_state_dict = {}
         for key, value in model["state_dict"].items():
             if "model.encoder." in key:
                 encoder_state_dict[key[14:]] = value
@@ -240,8 +229,8 @@ class DFCVAE(BaseVAE):
                 decoder_input_state_dict[key[20:]] = value
             elif "model.final_layer." in key:
                 final_layer_state_dict[key[18:]] = value
-            elif "model.feature_network." in key:
-                feature_network_state_dict[key[22:]] = value
+            elif "model.vgg." in key:
+                vgg_state_dict[key[10:]] = value
             else:
                 print(key)
 
@@ -252,4 +241,3 @@ class DFCVAE(BaseVAE):
         self.decoder_input.load_state_dict(decoder_input_state_dict)
         self.final_layer.load_state_dict(final_layer_state_dict)
         self.vgg.load_state_dict(vgg_state_dict)
-        self.feature_network.load_state_dict(feature_network_state_dict)

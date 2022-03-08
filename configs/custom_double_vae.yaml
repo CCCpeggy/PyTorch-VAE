@@ -1,0 +1,30 @@
+model_params:
+  name: 'VanillaVAE'
+  in_channels: 1
+  latent_dim: 128
+
+exp_params:
+  dataset: screentone
+  # data_path: "../../../shared/datasets/gabor_noise_band_5_10"
+  # data_path: "../../../shared/datasets/real_screentone"
+  # data_path: "../../../shared/datasets/tmp_sc"
+  data_path: "../../../shared/datasets/20210906"
+  # data_path: "../../Dataset/Flow/3.5/sc"
+  # data_path: "../../Dataset/Batch/Conan/sc_classify_auto/0"
+  # data_path: "../../Dataset/Batch/Conan/cut"
+  # data_path: "../../Dataset/Batch/Conan_78_7/sc_auto"
+  # data_path: "../../Dataset/Batch/Conan_78_7/sc_auto"
+  img_size: 64
+  batch_size: 64 # Better to have a square number
+  LR: 0.001
+  weight_decay: 0.0
+  scheduler_gamma: 0.95
+
+trainer_params:
+  gpus: 1
+  max_epochs: 80
+
+logging_params:
+  save_dir: "logs/"
+  name: "Double-VAE"
+  manual_seed: 1265

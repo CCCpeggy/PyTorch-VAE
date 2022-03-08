@@ -30,14 +30,14 @@ class VAEXperiment(pl.LightningModule):
         except:
             pass
 
-    def forward(self, double_input: Tensor, input: Tensor, **kwargs) -> Tensor:
-        return self.model(double_input, input, **kwargs)
+    def forward(self, input: Tensor, **kwargs) -> Tensor:
+        return self.model(input, **kwargs)
 
     def training_step(self, batch, batch_idx, optimizer_idx = 0):
-        double_img, real_img = batch
+        real_img, labels = batch
         self.curr_device = real_img.device
 
-        results = self.forward(double_img, real_img)
+        results = self.forward(real_img, labels = labels)
         train_loss = self.model.loss_function(*results,
                                               M_N = self.params['batch_size']/ self.num_train_imgs,
                                               optimizer_idx=optimizer_idx,
@@ -46,12 +46,12 @@ class VAEXperiment(pl.LightningModule):
         self.logger.experiment.log({key: val.item() for key, val in train_loss.items()})
 
         return train_loss
-
+    
     def validation_step(self, batch, batch_idx, optimizer_idx = 0):
-        double_img, real_img = batch
+        real_img, labels = batch
         self.curr_device = real_img.device
 
-        results = self.forward(double_img, real_img)
+        results = self.forward(real_img, labels = labels)
         val_loss = self.model.loss_function(*results,
                                             M_N = self.params['batch_size']/ self.num_val_imgs,
                                             optimizer_idx = optimizer_idx,
@@ -67,13 +67,12 @@ class VAEXperiment(pl.LightningModule):
 
     def sample_images(self):
         # Get sample reconstruction image
-        double_test_input, test_input = next(iter(self.sample_dataloader))
-        double_test_input = double_test_input.to(self.curr_device)
+        test_input, test_label = next(iter(self.sample_dataloader))
         test_input = test_input.to(self.curr_device)
         # print(test_label)
         # test_label = test_label.to(self.curr_device)
         # recons = self.model.generate(test_input, labels = test_label)
-        recons = self.model.generate(double_test_input, test_input)
+        recons = self.model.generate(test_input)
         vutils.save_image(recons.data,
                           f"{self.logger.save_dir}{self.logger.name}/version_{self.logger.version}/"
                           f"recons_{self.logger.name}_{self.current_epoch}.png",

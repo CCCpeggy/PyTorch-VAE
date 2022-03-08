@@ -1,0 +1,22 @@
+model_params:
+  name: 'DFCVAE'
+  in_channels: 1
+  latent_dim: 128
+
+exp_params:
+  dataset: screentone
+  data_path: "../../../shared/datasets/gabor_noise_random"
+  img_size: 32
+  batch_size: 81 # Better to have a square number
+  LR: 0.005
+  weight_decay: 0.0
+  scheduler_gamma: 0.95
+
+trainer_params:
+  gpus: 1
+  max_epochs: 80
+
+logging_params:
+  save_dir: "logs/"
+  name: "Screentone-DFCVAE"
+  manual_seed: 1265
