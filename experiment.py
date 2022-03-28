@@ -1,4 +1,3 @@
-import os
 import math
 import torch
 from torch import optim
@@ -31,67 +30,76 @@ class VAEXperiment(pl.LightningModule):
         except:
             pass
 
-    def forward(self, double_input: Tensor, input: Tensor, **kwargs) -> Tensor:
-        return self.model(double_input, input, **kwargs)
+    def forward(self, input: Tensor, **kwargs) -> Tensor:
+        return self.model(input, **kwargs)
 
     def training_step(self, batch, batch_idx, optimizer_idx = 0):
-        double_img, real_img = batch
+        real_img, labels = batch
         self.curr_device = real_img.device
 
-        results = self.forward(double_img, real_img)
+        results = self.forward(real_img, labels = labels)
         train_loss = self.model.loss_function(*results,
-                                              M_N = self.params['kld_weight'], #al_img.shape[0]/ self.num_train_imgs,
+                                              M_N = self.params['batch_size']/ self.num_train_imgs,
                                               optimizer_idx=optimizer_idx,
                                               batch_idx = batch_idx)
 
-        self.log_dict({key: val.item() for key, val in train_loss.items()}, sync_dist=True)
+        self.logger.experiment.log({key: val.item() for key, val in train_loss.items()})
 
-        return train_loss['loss']
-
+        return train_loss
+    
     def validation_step(self, batch, batch_idx, optimizer_idx = 0):
-        double_img, real_img = batch
+        real_img, labels = batch
         self.curr_device = real_img.device
 
-        results = self.forward(double_img, real_img)
+        results = self.forward(real_img, labels = labels)
         val_loss = self.model.loss_function(*results,
-                                            M_N = 1.0, #real_img.shape[0]/ self.num_val_imgs,
+                                            M_N = self.params['batch_size']/ self.num_val_imgs,
                                             optimizer_idx = optimizer_idx,
                                             batch_idx = batch_idx)
         self.sample_images()
         return val_loss
 
-        
-    def on_validation_end(self) -> None:
+    def validation_end(self, outputs):
+        avg_loss = torch.stack([x['loss'] for x in outputs]).mean()
+        tensorboard_logs = {'avg_val_loss': avg_loss}
         self.sample_images()
-        
+        return {'val_loss': avg_loss, 'log': tensorboard_logs}
+
     def sample_images(self):
         # Get sample reconstruction image
-        double_test_input, test_input = next(iter(self.sample_dataloader))
-        double_test_input = double_test_input.to(self.curr_device)
+        test_input, test_label = next(iter(self.sample_dataloader))
         test_input = test_input.to(self.curr_device)
         # print(test_label)
         # test_label = test_label.to(self.curr_device)
         # recons = self.model.generate(test_input, labels = test_label)
-        recons = self.model.generate(double_test_input, test_input)
+        recons = self.model.generate(test_input)
         vutils.save_image(recons.data,
-                          os.path.join(self.logger.log_dir , 
-                                       "Reconstructions", 
-                                       f"recons_{self.logger.name}_Epoch_{self.current_epoch}.png"),
+                          f"{self.logger.save_dir}{self.logger.name}/version_{self.logger.version}/"
+                          f"recons_{self.logger.name}_{self.current_epoch}.png",
                           normalize=True,
                           nrow=12)
+
+        # vutils.save_image(test_input.data,
+        #                   f"{self.logger.save_dir}{self.logger.name}/version_{self.logger.version}/"
+        #                   f"real_img_{self.logger.name}_{self.current_epoch}.png",
+        #                   normalize=True,
+        #                   nrow=12)
 
         try:
             samples = self.model.sample(144,
                                         self.curr_device,
                                         labels = test_label)
             vutils.save_image(samples.cpu().data,
-                              os.path.join(self.logger.log_dir , 
-                                           "Samples",      
-                                           f"{self.logger.name}_Epoch_{self.current_epoch}.png"),
+                              f"{self.logger.save_dir}{self.logger.name}/version_{self.logger.version}/"
+                              f"{self.logger.name}_{self.current_epoch}.png",
                               normalize=True,
                               nrow=12)
-        except Warning:
+        except:
             pass
+
+
+        del test_input, recons #, samples
+
 
     def configure_optimizers(self):
 
@@ -150,6 +158,7 @@ class VAEXperiment(pl.LightningModule):
         return DataLoader(dataset,
                           batch_size= self.params['batch_size'],
                           shuffle = True,
+                        #   num_workers = 40,
                           drop_last=True)
 
     @data_loader
@@ -170,7 +179,8 @@ class VAEXperiment(pl.LightningModule):
                                                     split='test',
                                                     transform=transform),
                                                  batch_size= 144,
-                                                 shuffle = True)
+                                                #  num_workers = 40,
+                                                 shuffle = False)
             self.num_val_imgs = len(self.sample_dataloader)
         else:
             raise ValueError('Undefined dataset type')
@@ -205,6 +215,7 @@ class VAEXperiment(pl.LightningModule):
                                                     img_size=self.params['img_size'],
                                                     select_rect=self.select_rect),
                                                  batch_size= 144,
+                                                #  num_workers = 40,
                                                  shuffle = True)
             self.num_val_imgs = len(self.sample_dataloader)
         else:
@@ -225,8 +236,8 @@ class VAEXperiment(pl.LightningModule):
                                             SetRange])
         elif self.params['dataset'] == 'screentone':
             transform = transforms.Compose([
-                                            transforms.RandomCrop(self.params['img_size'] * 1.5),
-                                            transforms.Scale((self.params['img_size'], self.params['img_size'])),
+                                            transforms.RandomCrop(self.params['img_size']),
+                                            # transforms.Scale((self.params['img_size'], self.params['img_size'])),
                                             transforms.ToTensor(),
                                             SetRange
                                             ])

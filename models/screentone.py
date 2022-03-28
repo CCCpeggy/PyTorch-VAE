@@ -1,7 +1,7 @@
 from torch.utils.data import Dataset
 from PIL import Image
 import sys
-from .NoiseGenerator import *
+from .SCGenerator import genArg, genImg
 
 class ScreenTone(Dataset):
     
@@ -12,13 +12,12 @@ class ScreenTone(Dataset):
         self.transform = transform
 
     def __len__(self):
-        return len(self.files)
+        return 30000
 
     def __getitem__(self, idx):
-        arg = genArg()
-        img = genImg(arg)
-        cv2.imwrite("output.png", img)
-        image = Image.open(self.files[idx]).convert('L')
+        arg = genArg(self.img_size, self.img_size)
+        image = Image.fromarray(genImg(arg, self.img_size, self.img_size) / 255)
+        # image = Image.open(self.files[idx]).convert('L')
         image = self.transform(image)
         return image, []
         # return transforms.ToTensor()(double_image), transforms.ToTensor()(image)
