@@ -42,6 +42,7 @@ class ScreenTone(Dataset):
         # image = Image.open(self.files[idx]).convert('RGB')
         if self.split == 'predict':
             image = Image.open(self.files[idx]).convert('L')
+            
             if self.select_rect:
                 rw, rh = self.selecter.getRandomXY(self.files[idx])
                 half_size = self.img_size // 2
